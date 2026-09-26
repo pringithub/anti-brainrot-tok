@@ -1,0 +1,12 @@
+.jac/
+node_modules/
+.vscode/
+.idea/
+.venv/
+__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+# Generated narration audio (re-created by the generation pipeline)
+assets/media/

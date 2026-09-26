@@ -1,0 +1,138 @@
+# 01 — System Architecture
+
+## 1. High-level view
+
+```mermaid
+flowchart LR
+    subgraph Browser["Browser (jac-client SPA)"]
+        Feed[Feed / Swipe UI]
+        EP[Embed Player<br/>YouTube/Vimeo/TikTok iframes]
+        SR[Scene Renderer<br/>SVG + images + audio sync]
+    end
+
+    subgraph API["Jac app server (jac serve)"]
+        W1[Feed walkers]
+        W2[Interaction walkers]
+        W3[Admin / review walkers]
+        G[(Graph store<br/>MongoDB via jac persistence)]
+    end
+
+    subgraph Workers["Background workers (jac run, scheduled)"]
+        C[Curation pipeline]
+        GEN[Generation pipeline]
+        RS[Re-scoring / decay job]
+    end
+
+    subgraph External
+        YT[YouTube Data API]
+        OT[Other sources<br/>Vimeo, TED-Ed, NASA, PBS, IA]
+        NEWS[News RSS / GDELT]
+        IMG[Wikimedia Commons / Openverse /<br/>NASA / LoC / Smithsonian]
+        LLM[LLM provider via byllm]
+        EL[ElevenLabs TTS]
+    end
+
+    OBJ[(Object storage<br/>R2 / S3 / MinIO:<br/>mp3, images, manifests)]
+    CDN[CDN]
+
+    Feed --> W1 & W2
+    W1 & W2 & W3 --> G
+    C --> YT & OT & LLM
+    GEN --> NEWS & IMG & LLM & EL
+    C & GEN & RS --> G
+    GEN --> OBJ
+    OBJ --> CDN --> SR
+    EP -.iframe.-> YT & OT
+```
+
+## 2. Stack
+
+| Layer | Choice | Why |
+|-------|--------|-----|
+| Language | **Jac** (`jaclang`) | Requested; object-spatial model fits a social/interest graph |
+| Frontend | **jac-client** (JSX-like components in Jac, compiled to a React SPA) | Single language front-to-back |
+| API | **`jac serve`** (jac-cloud / jac-scale) | Walkers become authenticated REST endpoints; graph auto-persisted |
+| Persistence | MongoDB (jac persistence backend) + Redis (cache/sessions) | Default for jac serve |
+| AI | **byllm** (`by llm()`, `sem` strings) with a cheap default model, stronger model only where needed | Typed structured outputs without hand-written prompt parsing |
+| TTS | **ElevenLabs** (`/v1/text-to-speech/{voice}/with-timestamps`) | Returns character-level alignment → free captions + scene sync |
+| Media storage | Cloudflare R2 (zero egress) or S3; MinIO locally | Cheap static delivery |
+| Optional render | ffmpeg (already on dev box) | Only for MP4 export/share |
+| Python interop | Jac imports Python packages directly (`httpx`, `feedparser`, `yt-dlp` for **metadata/captions only**) | Reuse mature libs |
+
+## 3. Components
+
+### 3.1 Frontend (jac-client)
+- `App` → router: `/` (For You), `/following`, `/topic/:slug`, `/v/:id`, `/saved`, `/profile`, `/admin/review`.
+- `FeedPager` — vertical snap-scroll container, keeps 3 items mounted (prev/current/next), preloads next 2.
+- `VideoCard` — dispatches to `EmbedPlayer` (curated) or `ScenePlayer` (generated).
+- `ScenePlayer` — plays narration `<audio>`, uses word timestamps to switch scenes and render captions; scenes are SVG templates or images with CSS Ken-Burns/transition animations.
+- `ActionRail` — like, save, share, "sources", "why this?", "not useful".
+- `QuizCard` — occasional recall card inserted into the feed.
+- `SessionCoach` — soft check-in after N minutes / N videos.
+
+### 3.2 API server (walkers)
+Walkers are the API. See [02-data-model.md](02-data-model.md) for the list. Stateless; horizontal scaling behind a load balancer.
+
+### 3.3 Background workers
+Separate processes (same codebase) run on a schedule (systemd timers / cron / k8s CronJob):
+- `pipelines/curate.jac` — hourly discovery + vetting batch.
+- `pipelines/generate.jac` — daily topic-gap + current-events batch; also consumes an on-demand queue (admin "generate about X").
+- `pipelines/rescore.jac` — nightly: decay freshness, recompute quality from engagement signals, prune dead embeds.
+
+A simple job queue is a `Job` node in the graph (status: queued/running/done/failed) — avoids adding Celery/RabbitMQ early. Swap to a real queue if throughput demands.
+
+### 3.4 Admin / review
+Human-in-the-loop for (a) current-events generated videos before publish, (b) borderline curated scores. Walkers gated by an `is_admin` flag on the user node.
+
+## 4. Proposed repo layout
+
+```
+anti-brainrot-tok/
+├── jac.toml                    # project + plugin config (jac-client, byllm)
+├── main.jac                    # entry: serves walkers + client app
+├── models/
+│   ├── nodes.jac               # User, Topic, Video, Source, Creator, Job, Quiz...
+│   ├── edges.jac               # Watched, Liked, Saved, InTopic, Follows...
+│   └── types.jac               # obj types: Script, Scene, QualityScore, Citation...
+├── walkers/
+│   ├── feed.jac                # get_feed, get_video, get_topic_feed
+│   ├── interact.jac            # log_view, like, save, skip, report, answer_quiz
+│   ├── user.jac                # onboarding, follow_topic, prefs
+│   └── admin.jac               # review_queue, approve, reject, enqueue_generation
+├── ai/
+│   ├── scoring.jac             # by llm() quality/bias/topic classification
+│   ├── scripting.jac           # by llm() script + scene-param generation
+│   └── factcheck.jac           # by llm() claim verification vs retrieved sources
+├── services/                   # thin clients over external APIs
+│   ├── youtube.jac
+│   ├── sources.jac             # Vimeo / TED-Ed / NASA / IA adapters
+│   ├── news.jac                # RSS + GDELT
+│   ├── images.jac              # Wikimedia / Openverse / NASA / LoC search + license filter
+│   ├── elevenlabs.jac
+│   └── storage.jac             # R2/S3 put/get, content-hash keys
+├── pipelines/
+│   ├── curate.jac
+│   ├── generate.jac
+│   └── rescore.jac
+├── client/                     # jac-client components
+│   ├── app.jac
+│   ├── feed/                   # FeedPager, VideoCard, ActionRail
+│   ├── players/                # EmbedPlayer, ScenePlayer, CaptionTrack
+│   └── scenes/                 # SVG template renderers (TitleCard, Timeline, MapPin, ...)
+├── svg_templates/              # canonical SVG template definitions + JSON param schemas
+├── scripts/export_mp4.py       # optional ffmpeg export
+└── tests/
+```
+
+## 5. Deployment
+
+- **Dev**: `docker compose` with MongoDB, Redis, MinIO; `jac serve main.jac`; workers via `jac run`.
+- **Prod (small)**: one container for API (+ static client build), one for workers, managed MongoDB (Atlas free/low tier), Redis, R2 + CDN. Scale API horizontally; workers are cron-driven and idempotent.
+- **Secrets**: `YOUTUBE_API_KEY`, `ELEVENLABS_API_KEY`, LLM key(s), storage creds — env vars / secret manager only, never in the graph or client bundle.
+
+## 6. Cross-cutting concerns
+
+- **Auth**: jac serve built-in user auth (email/password → token); anonymous browsing allowed with a device-scoped guest user so the feed personalises before sign-up.
+- **Security**: all external URLs rendered only through an allowlist of embed hosts; SVG templates are ours (LLM supplies text params only, escaped) → no SVG/XSS injection; CSP restricting `frame-src` to embed providers; rate-limit interaction walkers.
+- **Observability**: structured logs per pipeline run (items discovered/accepted/rejected, tokens used, TTS chars used, cost estimate) stored as `PipelineRun` nodes + exported to logs.
+- **Idempotency**: every external item keyed by `(source, external_id)`; every generated asset keyed by content hash.
