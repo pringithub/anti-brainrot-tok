@@ -1,6 +1,6 @@
 # SmartTok
 
-![SmartTok: brainrot vs learning](assets/brand/smarttok-thumbnail.png)
+![SmartTok: brainrot vs learning](assets/brand/smarttok-new-thumbnail.png)
 
 **Scroll smarter.** SmartTok is a TikTok-style vertical video feed where every video is worth your
 time: science, engineering, history, languages, math, DIY and news from multiple outlets. It is a
@@ -29,18 +29,6 @@ the web UI).
 ## How it works
 
 ![SmartTok architecture: client, server agents, graph store and external services](assets/jac_learning_platform.png)
-
-```mermaid
-flowchart LR
-    UI[Browser<br/>jac-client UI] -->|walkers / RPC| API[Jac server]
-    API --> G[(Graph<br/>topics · videos · users)]
-    CLI[tools/admin.jac] --> API
-    API --> Plan[PlanCatalog walker] --> Jobs[(Job queue)]
-    Jobs --> Cur[Curation<br/>YouTube RSS + scoring]
-    Jobs --> Gen[Research agent<br/>Wikipedia tools + fact-check]
-    Gen --> Img[Wikimedia Commons]
-    Gen --> TTS[ElevenLabs / browser TTS]
-```
 
 - The catalog (topics, videos, channels) lives on the shared graph root; each user has a `Profile`
   node with `Engaged` edges to the videos they interacted with.
