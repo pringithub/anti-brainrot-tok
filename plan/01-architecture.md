@@ -1,49 +1,114 @@
 # 01 — System Architecture
 
+> Section 1 reflects the actual implementation as of 2026-09; the rest of this
+> document (sections 2-6) is the original design plan and has drifted from
+> what's built — see the "Plan vs. reality" note after the diagram.
+
 ## 1. High-level view
 
 ```mermaid
 flowchart LR
-    subgraph Browser["Browser (jac-client SPA)"]
-        Feed[Feed / Swipe UI]
-        EP[Embed Player<br/>YouTube/Vimeo/TikTok iframes]
-        SR[Scene Renderer<br/>SVG + images + audio sync]
-    end
+    User((User)) --> Client[Jac client SPA<br/>feed, player, quiz, admin panels]
+    Admin((Admin CLI)) --> Client
 
-    subgraph API["Jac app server (jac serve)"]
-        W1[Feed walkers]
-        W2[Interaction walkers]
-        W3[Admin / review walkers]
-        G[(Graph store<br/>MongoDB via jac persistence)]
-    end
+    Client <-->|RPC| Server[Jac server<br/>feed + admin API]
+    Client --> BrowserVoice[Browser Web Speech API<br/>local voice, no network]
 
-    subgraph Workers["Background workers (jac run, scheduled)"]
-        C[Curation pipeline]
-        GEN[Generation pipeline]
-        RS[Re-scoring / decay job]
-    end
+    Server --> PlanAgent{{Planning agent<br/>supply/demand -> jobs}}
+    Server --> CurAgent{{Curation agent<br/>discover + score videos}}
+    Server --> GenAgent{{Generation agent<br/>research + script + fact-check}}
 
-    subgraph External
-        YT[YouTube Data API]
-        OT[Other sources<br/>Vimeo, TED-Ed, NASA, PBS, IA]
-        NEWS[News RSS / GDELT]
-        IMG[Wikimedia Commons / Openverse /<br/>NASA / LoC / Smithsonian]
-        LLM[LLM provider via byllm]
-        EL[ElevenLabs TTS]
-    end
-
-    OBJ[(Object storage<br/>R2 / S3 / MinIO:<br/>mp3, images, manifests)]
-    CDN[CDN]
-
-    Feed --> W1 & W2
-    W1 & W2 & W3 --> G
-    C --> YT & OT & LLM
-    GEN --> NEWS & IMG & LLM & EL
-    C & GEN & RS --> G
-    GEN --> OBJ
-    OBJ --> CDN --> SR
-    EP -.iframe.-> YT & OT
+    Server <--> Graph[(Graph store<br/>topics, videos, users, jobs)]
+    Server <--> Media[(Local media store<br/>audio + generated assets)]
+    PlanAgent & CurAgent & GenAgent --> AI[AI layer<br/>LLM scoring, scripting, fact-check]
+    CurAgent & GenAgent --> Sources[External sources<br/>YouTube, Wikipedia, Wikimedia Commons]
+    AI --> LLM[Google Gemini<br/>via byllm]
+    GenAgent -.optional.-> ElevenLabs[ElevenLabs TTS]
+    GenAgent -.optional.-> GCTTS[Google Cloud TTS]
 ```
+
+### Detailed view
+
+```mermaid
+flowchart LR
+    subgraph Browser["Browser (jac-client SPA, components/*.cl.jac)"]
+        Landing[Landing]
+        Shell[AppShell]
+        FeedUI[FeedPager / VideoCard]
+        Scene[ScenePlayer + Scenes<br/>SVG templates, audio-synced captions]
+        WebSpeech{{"Web Speech API<br/>(voicePref: browser | google)"}}
+        Quiz[QuizCard]
+    end
+
+    CLI[tools/admin.jac<br/>CLI over ABT_ADMIN_KEY]
+
+    subgraph Server["jac server, single process (jac start / jac serve)"]
+        FeedSvc["feed.sv.jac<br/>walker LoadFeed + def:pub list_topics/get_video/..."]
+        AdminSvc["admin.sv.jac<br/>def:pub admin_* (curate/generate/review/run_jobs)"]
+        Plan["planner.sv.jac<br/>walker PlanCatalog: supply/demand -> Job nodes"]
+        Cur["curation.sv.jac<br/>run_curation"]
+        Gen["generation.sv.jac<br/>script -> fact-check -> images -> TTS -> manifest"]
+        Research["research.sv.jac<br/>ReAct agent: search/read Wikipedia + self-revise"]
+        AISvc["ai.sv.jac<br/>byllm Model + scoring/script/claim-check defs"]
+        Graph[("Local graph store (jac persistence)<br/>root.shared: Topic/Video/Job/Signal<br/>per-user root: Profile/Interaction")]
+    end
+
+    CLI --> AdminSvc
+    Landing --> Shell --> FeedUI & Quiz
+    FeedUI --> Scene
+    Shell -->|RPC| FeedSvc
+    CLI -.admin RPC.-> AdminSvc
+    FeedSvc <--> Graph
+    AdminSvc <--> Graph
+    AdminSvc --> Cur & Gen & Plan
+    Plan --> Graph
+    Cur -->|keyless RSS| YT[YouTube channel feeds]
+    Gen --> Research --> Wiki[Wikipedia API]
+    Research --> AISvc
+    Gen --> AISvc --> LLM[LLM provider via byllm<br/>default gpt-4o-mini]
+    Gen --> Img[Wikimedia Commons images]
+    Gen --> Media[("assets/media/<br/>served at /static")]
+    Gen -->|voicePref == elevenlabs<br/>mp3 + word timestamps| ElevenLabs[ElevenLabs TTS API]
+    ElevenLabs --> Media --> Scene
+    Scene -->|voicePref == browser/google,<br/>no network call| WebSpeech
+```
+
+### Plan vs. reality (what changed since the original design)
+
+- **No MongoDB/Redis/object storage.** The project uses jac's built-in local
+  graph persistence and files under `assets/` served at `/static/...` — no
+  Mongo, Redis, R2/S3/MinIO, or CDN were introduced.
+- **No separate worker processes or `pipelines/`/`walkers/`/`ai/` dirs.**
+  Everything lives in `services/*.sv.jac`. Curation and generation run
+  synchronously inside the same server process, triggered either directly
+  (`admin_curate`/`admin_generate`) or via a `Job` queue (graph nodes) that
+  `planner.sv.jac`'s `PlanCatalog` walker fills and `admin_run_jobs` drains —
+  there's no cron/systemd-timer/k8s CronJob yet.
+- **Most endpoints are plain `def:pub` functions, not walkers.** Only
+  `LoadFeed` (feed.sv.jac) and `PlanCatalog` (planner.sv.jac) are actual
+  `walker:pub` — admin/curation/generation/scoring are ordinary functions
+  called over RPC.
+- **Generation is a Wikipedia-grounded ReAct research agent**
+  (`research.sv.jac`), not a generic "sources -> LLM" step: the agent
+  searches/reads Wikipedia itself via tool calls, and citations + fact-check
+  are restricted to articles it actually read, with a self-revision loop for
+  unsupported claims.
+- **TTS has three user-selectable voice preferences**, only one of which
+  touches a server/API at all: `browser` and `google` both play locally via
+  the browser's native Web Speech API (`speechSynthesis`/`SpeechSynthesisUtterance`
+  in `ScenePlayer.cl.jac`) — `google` just filters `getVoices()` for a
+  Google-branded system voice, it does **not** call any Google Cloud API;
+  `elevenlabs` calls the ElevenLabs TTS API server-side (`generation.sv.jac`)
+  and caches an mp3 + word-level timestamps in `assets/media` for
+  caption/scene sync. ElevenLabs requires `ELEVENLABS_API_KEY`
+  (`elevenlabs_enabled()`) and is not the primary path assumed in section 2/3.
+- **Frontend is a flat `components/*.cl.jac` dir** (`AppShell`, `Landing`,
+  `FeedPager`, `VideoCard`, `ScenePlayer`, `Scenes`, `QuizCard`, `Panels`),
+  not the nested `client/{feed,players,scenes}/` layout in section 4, and
+  there is no client-side multi-page router beyond `/` (Landing) and `/app`
+  (AppShell) in `main.jac`.
+- **No MP4 export/ffmpeg pipeline exists** — everything renders as a JSON
+  scene manifest played live in the browser.
 
 ## 2. Stack
 

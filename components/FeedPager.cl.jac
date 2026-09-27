@@ -12,6 +12,7 @@ def:pub FeedPager(
     paused: bool,
     loading: bool,
     emptyText: str,
+    voicePref: str,
     onActive: Callable[[int], None],
     onNearEnd: Callable[[], None],
     onReact: Callable[[str, str, bool], None],
@@ -19,6 +20,13 @@ def:pub FeedPager(
     onWatched: Callable[[str, float, bool], None]
 ) -> JsxElement {
     has boxRef: Ref[any] = Ref();
+
+    def go_next() {
+        el: any = boxRef.current;
+        if el {
+            el.scrollBy({"top": el.clientHeight, "behavior": "smooth"});
+        }
+    }
 
     def handle_scroll(e: Event) {
         el: any = boxRef.current;
@@ -69,9 +77,11 @@ def:pub FeedPager(
                         key="card"
                         item={it}
                         active={i == activeIdx and not paused}
+                        voicePref={voicePref}
                         onReact={onReact}
                         onOpenSheet={onOpenSheet}
                         onWatched={onWatched}
+                        onNext={go_next}
                     />
                 }}
             </section>

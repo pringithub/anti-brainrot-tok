@@ -12,9 +12,16 @@ import from services.planner { PlanCatalog }
 
 cl {
     import ".styles/global.css";
+    import from "@jac/runtime" { Router, Routes, Route }
     import from .components.AppShell { AppShell }
+    import from .components.Landing { Landing }
 
     def:pub app -> JsxElement {
-        return <AppShell/>;
+        return <Router>
+            <Routes>
+                <Route path="/" element={<Landing/>} />
+                <Route path="/app" element={<AppShell/>} />
+            </Routes>
+        </Router>;
     }
 }

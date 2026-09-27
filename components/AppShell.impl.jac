@@ -262,3 +262,16 @@ impl AppShell.followTopic(slug: str, on: bool) -> None {
         topics = tl;
     }
 }
+
+impl AppShell.setVoicePref(pref: str) -> None {
+    prof: ProfileView | None = None;
+    try {
+        prof = await set_tts_pref(pref);
+    } except Exception as err {
+        log_error("voice", err);
+        return;
+    }
+    if prof is not None {
+        profile = prof;
+    }
+}

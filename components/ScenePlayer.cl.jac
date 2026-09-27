@@ -38,7 +38,7 @@ def _word_at(words: list[list], t: float) -> int {
 }
 
 def:pub ScenePlayer(
-    manifestJson: str, emoji: str, active: bool, onEnded: Callable[[], None]
+    manifestJson: str, emoji: str, active: bool, voicePref: str, onEnded: Callable[[], None]
 ) -> JsxElement {
     has t: float = 0.0,
         speechScene: int = 0,
@@ -59,8 +59,22 @@ def:pub ScenePlayer(
     }, [manifestJson]);
     scenes = (m["scenes"] or []) as list[dict];
     words = (m["words"] or []) as list[list];
-    use_audio = (m["tts"] == "elevenlabs") and bool(m["audio"]);
+    use_audio = (voicePref == "elevenlabs") and (m["tts"] == "elevenlabs") and bool(m["audio"]);
     duration = float(m["duration"] or 30);
+
+    def _pick_voice -> any {
+        synth = _synth();
+        if not synth or voicePref != "google" {
+            return None;
+        }
+        voices = (synth.getVoices() or []) as list[any];
+        for v in voices {
+            if "google" in str(v.name or "").lower() {
+                return v;
+            }
+        }
+        return None;
+    }
 
     def speak_all(gen: int) {
         synth = _synth();
@@ -82,6 +96,10 @@ def:pub ScenePlayer(
         u: any = new(g.SpeechSynthesisUtterance, text);  # jac:ignore[E1053]
         u.rate = 1.0;
         u.lang = "en-US";
+        voice = _pick_voice();
+        if voice {
+            u.voice = voice;
+        }
         u.onstart = lambda {
             if genRef.current == gen {
                 speechScene = idx;
@@ -97,6 +115,7 @@ def:pub ScenePlayer(
         }
         _synth().speak(u);
     }
+
 
     useEffect(lambda {
         gen = (genRef.current or 0) + 1;

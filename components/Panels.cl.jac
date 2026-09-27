@@ -1,6 +1,7 @@
 """Bottom sheets and full-screen cards: sources/why, session check-in, onboarding."""
 
 sv import from ..services.catalog { VideoView, TopicView, ProfileView }
+sv import from ..services.feed { request_generation }
 
 def _is_http(u: str) -> bool {
     return u.startswith("https://") or u.startswith("http://");
@@ -159,6 +160,36 @@ def:pub Onboarding(
 def:pub TopicsPage(
     topics: list[TopicView], onWatch: Callable[[str], None], onFollow: Callable[[str, bool], None]
 ) -> JsxElement {
+    has openSlug: str = "",
+        subjectText: str = "",
+        requestMsg: str = "",
+        requesting: bool = False;
+
+    def toggle_request(slug: str) {
+        openSlug = "" if openSlug == slug else slug;
+        subjectText = "";
+        requestMsg = "";
+    }
+
+    async def submit_request(slug: str) -> None {
+        subj = subjectText.strip();
+        if not subj or requesting {
+            return;
+        }
+        requesting = True;
+        try {
+            res = await request_generation(slug, subj);
+            requestMsg = res.message;
+            if res.ok {
+                subjectText = "";
+            }
+        } except Exception as e {
+            requestMsg = "Couldn't send that — try again.";
+            console.warn("[topics] request failed", e);
+        }
+        requesting = False;
+    }
+
     return <div className="page-scroll">
         <h2 className="page-title">Topics</h2>
         <div className="topic-list">
@@ -174,18 +205,38 @@ def:pub TopicsPage(
                     <p className="small">{t.description}</p>
                     <div className="topic-actions">
                         <button className="pill" onClick={lambda e: MouseEvent { onWatch(t.slug); }}>Watch</button>
-                        <button
+                        {not t.is_virtual and <button
                             className={"pill ghost on" if t.followed else "pill ghost"}
                             onClick={lambda e: MouseEvent { onFollow(t.slug, not t.followed); }}
-                        >{"Following" if t.followed else "Follow"}</button>
+                        >{"Following" if t.followed else "Follow"}</button>}
+                        {not t.is_current_events and not t.is_virtual and <button className="pill ghost" onClick={lambda e: MouseEvent { toggle_request(t.slug); }}>
+                            {"Cancel" if openSlug == t.slug else "Request a video"}
+                        </button>}
                     </div>
+                    {openSlug == t.slug and <div className="topic-request">
+                        <input
+                            className="topic-request-input"
+                            placeholder={"What should we cover in " + t.name + "?"}
+                            value={subjectText}
+                            maxLength={200}
+                            onChange={lambda e: ChangeEvent { subjectText = e.target.value; }}
+                        />
+                        <button
+                            className="pill"
+                            disabled={requesting or not subjectText.strip()}
+                            onClick={lambda e: MouseEvent { submit_request(t.slug); }}
+                        >{"Sending…" if requesting else "Submit"}</button>
+                        {requestMsg and <p className="small">{requestMsg}</p>}
+                    </div>}
                 </div>
             }}
         </div>
     </div>;
 }
 
-def:pub ProfilePage(profile: ProfileView | None, topics: list[TopicView]) -> JsxElement {
+def:pub ProfilePage(
+    profile: ProfileView | None, topics: list[TopicView], onSetVoice: Callable[[str], None]
+) -> JsxElement {
     if profile is None {
         return <div className="page-scroll"><p>Loading…</p></div>;
     }
@@ -210,6 +261,15 @@ def:pub ProfilePage(profile: ProfileView | None, topics: list[TopicView]) -> Jsx
             <h4>You've been learning about</h4>
             <ul>{for s in profile.top_topics { <li key={s}>{names[s] or s}</li> }}</ul>
         </div>}
+        <div className="sheet-block">
+            <h4>Narration voice</h4>
+            <select value={profile.tts_pref} onChange={lambda e: ChangeEvent { onSetVoice(e.target.value); }}>
+                <option value="elevenlabs">ElevenLabs (studio narration)</option>
+                <option value="google">Google (browser voice)</option>
+                <option value="browser">Browser default</option>
+            </select>
+            <p className="small">Applies to generated videos; falls back to your browser's voice when studio narration isn't available.</p>
+        </div>
         <p className="small">{"Check-ins every " + str(profile.checkin_every) + " minutes."}</p>
     </div>;
 }

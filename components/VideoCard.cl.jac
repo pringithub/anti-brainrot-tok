@@ -1,49 +1,31 @@
-"""One full-screen feed item: curated embed or generated scene video, plus the
-action rail and info overlay. Reports dwell time when it stops being active."""
+"""One feed item. Generated videos are full-bleed with SmartTok overlays; third-party
+embeds get a framed layout where nothing covers the player, so YouTube's own
+controls and ours are both visible and usable. Reports dwell time on deactivate."""
 
 import from react { useEffect }
 import from .ScenePlayer { ScenePlayer }
 import from .QuizCard { QuizCard }
-import from .browser { yt_command, now_ms }
+import from .browser { now_ms }
 
 sv import from ..services.catalog { VideoView, FeedItem }
 
 glob EMBED_COMPLETE_S: float = 40.0;
 glob DOUBLE_TAP_MS: float = 320.0;
 
-"""YouTube embed with a transparent shield on top: swipes/wheel reach the feed
-instead of the iframe, and taps pause/resume through the IFrame API."""
 def:pub EmbedPlayer(video: VideoView, active: bool) -> JsxElement {
-    has frameRef: Ref[any] = Ref(),
-        paused: bool = False;
-
-    useEffect(lambda {
-        paused = False;
-    }, [active]);
-
-    def tap(e: MouseEvent) {
-        yt_command(frameRef.current, "playVideo" if paused else "pauseVideo");
-        paused = not paused;
-    }
-
     if not active or not video.embed_url.startswith("https://www.youtube-nocookie.com/embed/") {
         return <div className="embed-poster">
             {video.thumbnail_url and <img src={video.thumbnail_url} alt="" referrerPolicy="no-referrer"/>}
         </div>;
     }
-    return <div className="embed-wrap">
-        <iframe
-            ref={frameRef}
-            className="embed-frame"
-            src={video.embed_url}
-            title={video.title}
-            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-            referrerPolicy="strict-origin-when-cross-origin"
-            allowFullScreen={True}
-        />
-        <div className="embed-shield" onClick={tap}/>
-        {paused and <div className="center-badge">❚❚</div>}
-    </div>;
+    return <iframe
+        className="embed-frame"
+        src={video.embed_url}
+        title={video.title}
+        allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+        referrerPolicy="strict-origin-when-cross-origin"
+        allowFullScreen={True}
+    />;
 }
 
 def:pub RailButton(icon: str, label: str, on: bool, onPress: Callable[[], None]) -> JsxElement {
@@ -60,9 +42,11 @@ def:pub RailButton(icon: str, label: str, on: bool, onPress: Callable[[], None])
 def:pub VideoCard(
     item: FeedItem,
     active: bool,
+    voicePref: str,
     onReact: Callable[[str, str, bool], None],
     onOpenSheet: Callable[[VideoView], None],
-    onWatched: Callable[[str, float, bool], None]
+    onWatched: Callable[[str, float, bool], None],
+    onNext: Callable[[], None]
 ) -> JsxElement {
     has startRef: Ref[float] = Ref(0.0),
         doneRef: Ref[bool] = Ref(False),
@@ -112,8 +96,13 @@ def:pub VideoCard(
         onOpenSheet(video);
     }
 
+    def go_next(e: MouseEvent) {
+        e.stopPropagation();
+        onNext();
+    }
+
     def share() {
-        url = window.location.origin + "/?v=" + vid;
+        url = window.location.origin + "/app?v=" + vid;
         nav: any = window.navigator;
         if nav.share {
             nav.share({"title": video.title, "url": url}).catch(lambda e: any {});
@@ -140,7 +129,7 @@ def:pub VideoCard(
     return <div className={"card card-" + video.kind} onClick={handle_tap}>
         <div className="media">
             {video.kind == "generated"
-                and <ScenePlayer manifestJson={video.manifest_json} emoji={video.topic_emoji} active={active} onEnded={mark_done}/>}
+                and <ScenePlayer manifestJson={video.manifest_json} emoji={video.topic_emoji} active={active} voicePref={voicePref} onEnded={mark_done}/>}
             {video.kind != "generated" and <EmbedPlayer video={video} active={active}/>}
         </div>
         {heart and <div className="big-heart">♥</div>}
@@ -160,6 +149,7 @@ def:pub VideoCard(
             <div className="creator">{"@" + video.creator_name}</div>
             <div className="title">{video.title}</div>
             {video.why and <div className="why">{video.why}</div>}
+            {video.kind != "generated" and <button className="pill next-btn" onClick={go_next}>Next ↓</button>}
         </div>
     </div>;
 }

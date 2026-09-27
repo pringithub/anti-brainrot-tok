@@ -40,14 +40,6 @@ def:pub now_ms -> float {
     return _g().Date.now() as float;
 }
 
-"""Send a YouTube IFrame API command (needs enablejsapi=1 on the embed URL)."""
-def:pub yt_command(frame: any, fn: str) {
-    if frame and frame.contentWindow {
-        msg = _g().JSON.stringify({"event": "command", "func": fn, "args": []});
-        frame.contentWindow.postMessage(msg, "https://www.youtube-nocookie.com");
-    }
-}
-
 def:pub prime_speech {
     s: any = _g().speechSynthesis;
     if s {

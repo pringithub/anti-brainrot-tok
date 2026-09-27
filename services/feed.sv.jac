@@ -4,17 +4,21 @@ Per-user state is a Profile node under the caller's root plus one Engaged edge
 per video the user touched (Profile -[Engaged]-> Video in the shared catalog).
 """
 
+import re;
 import math;
 import random;
 import from datetime { datetime, timezone, timedelta }
 import from services.catalog {
-    Topic, Video, InTopic, Profile, Engaged, Signal, VideoView, QuizView, FeedItem, TopicView,
-    ProfileView, all_topics, videos_of, topic_by_slug, video_by_id, signal_log, to_view, now_iso,
-    today_str
+    Topic, Video, InTopic, Profile, Engaged, Signal, Job, VideoView, QuizView, FeedItem, TopicView,
+    ProfileView, RequestResult, all_topics, videos_of, topic_by_slug, video_by_id, signal_log,
+    to_view, now_iso, today_str, job_queue, jobs
 }
 
 glob MAX_LIMIT: int = 12;
 glob EXPLORE_SHARE: float = 0.18;
+glob MAX_PENDING_REQUESTS: int = 3;
+glob TTS_PREFS: set[str] = {"browser", "google", "elevenlabs"};
+glob GENERATED_TOPIC_SLUG: str = "generated";
 
 # ---------------------------------------------------------------- helpers
 
@@ -97,7 +101,8 @@ def _profile_view(prof: Profile) -> ProfileView {
         streak_days=prof.streak_days,
         quiz_correct=prof.quiz_correct,
         quiz_total=prof.quiz_total,
-        top_topics=ranked[:3]
+        top_topics=ranked[:3],
+        tts_pref=prof.tts_pref
     );
 }
 
@@ -212,6 +217,7 @@ walker:pub LoadFeed {
         if self.mode == "following" and followed and here.slug not in followed {
             skip;
         }
+        # "generated" mode spans every topic; score_video narrows it to kind=="generated".
         w = prof.interests.get(here.slug, 0.0) if prof is not None else 0.0;
         self.weights[here.slug] = max(0.3, min(2.5, 1.0 + w)) + (0.5 if here.slug in followed else 0.0);
         visit [here ->:InTopic:->];
@@ -219,6 +225,9 @@ walker:pub LoadFeed {
 
     can score_video with Video entry {
         if here.status != "live" or (here.expires_at and here.expires_at < self.now) {
+            skip;
+        }
+        if self.mode == "generated" and here.kind != "generated" {
             skip;
         }
         vid = jid(here);
@@ -283,14 +292,24 @@ walker:pub LoadFeed {
 def:pub list_topics() -> list[TopicView] {
     prof = _profile_or_none();
     followed = prof.followed if prof is not None else [];
-    return [
+    topics = [
         TopicView(
             slug=t.slug, name=t.name, emoji=t.emoji, description=t.description,
             count=len([v for v in videos_of(t) if v.status == "live"]),
-            followed=(t.slug in followed)
+            followed=(t.slug in followed), is_current_events=t.is_current_events
         )
         for t in all_topics()
     ];
+    generated_count = sum(
+        len([v for v in videos_of(t) if v.status == "live" and v.kind == "generated"])
+        for t in all_topics()
+    );
+    topics.append(TopicView(
+        slug=GENERATED_TOPIC_SLUG, name="Generated", emoji="✨",
+        description="SmartTok's own AI-narrated explainers, fact-checked against the sources they cite.",
+        count=generated_count, is_current_events=True, is_virtual=True
+    ));
+    return topics;
 }
 
 def:pub get_video(video_id: str) -> FeedItem | None {
@@ -307,6 +326,14 @@ def:pub get_video(video_id: str) -> FeedItem | None {
 def:priv get_profile() -> ProfileView {
     prof = _ensure_profile();
     _roll_day(prof);
+    return _profile_view(prof);
+}
+
+def:priv set_tts_pref(pref: str) -> ProfileView {
+    prof = _ensure_profile();
+    if pref in TTS_PREFS {
+        prof.tts_pref = pref;
+    }
     return _profile_view(prof);
 }
 
@@ -338,6 +365,54 @@ def:priv follow_topic(slug: str, on: bool) -> list[str] {
     }
     prof.followed = current;
     return current;
+}
+
+def _norm_subject(s: str) -> str {
+    return re.sub("[^a-z0-9 ]", "", s.lower()).strip();
+}
+
+def _job_active(job_id: str) -> bool {
+    try {
+        j = jobj(job_id);
+    } except Exception {
+        return False;
+    }
+    return isinstance(j, Job) and j.status in ("queued", "running");
+}
+
+"""Queue a user-suggested subject for the generation pipeline to pick up.
+Actual generation runs later (job worker), so this only enqueues a Job."""
+def:priv request_generation(topic: str, subject: str) -> RequestResult {
+    t = topic_by_slug(topic);
+    if t is None {
+        return RequestResult(ok=False, message="Unknown topic.");
+    }
+    if t.is_current_events {
+        return RequestResult(ok=False, message="Current-events videos are curated automatically, not requested.");
+    }
+    subj = subject.strip()[:200];
+    if not subj {
+        return RequestResult(ok=False, message="Describe what you'd like a video about.");
+    }
+    prof = _ensure_profile();
+    active = [j for j in prof.requested_jobs if _job_active(j)];
+    if len(active) >= MAX_PENDING_REQUESTS {
+        return RequestResult(ok=False, message="You have " + str(len(active)) + " requests pending — wait for those to finish.");
+    }
+    norm = _norm_subject(subj);
+    for j in jobs("queued") + jobs("running") {
+        if j.kind == "generate" and j.topic == topic and _norm_subject(j.subject) == norm {
+            prof.requested_jobs = active;
+            return RequestResult(ok=True, message="Already queued — we'll add it once it's generated.");
+        }
+    }
+    q = job_queue();
+    if q is None {
+        return RequestResult(ok=False, message="Catalog isn't ready yet.");
+    }
+    job = (q ++> Job(kind="generate", topic=topic, subject=subj, reason="user request", created_at=now_iso()))[0];
+    prof.requested_jobs = active + [jid(job)];
+    return RequestResult(ok=True, message="Queued! New videos are generated in batches, check back soon.");
 }
 
 def:priv log_view(video_id: str, watch_s: float, completed: bool) -> ProfileView {

@@ -10,3 +10,5 @@ __pycache__/
 .env.*
 # Generated narration audio (re-created by the generation pipeline)
 assets/media/
+# Playwright MCP scratch output (screenshots/snapshots from tool sessions)
+.playwright-mcp/

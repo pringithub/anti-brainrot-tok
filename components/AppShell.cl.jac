@@ -11,7 +11,7 @@ import from .Panels {
 sv import from ..services.catalog { VideoView, FeedItem, TopicView, ProfileView }
 sv import from ..services.feed {
     LoadFeed, list_topics, get_video, get_profile, save_onboarding, follow_topic, log_view,
-    set_reaction, report_video, list_saved
+    set_reaction, report_video, list_saved, set_tts_pref
 }
 
 glob PAGE_SIZE: int = 6;
@@ -60,6 +60,7 @@ def:pub AppShell -> JsxElement {
     async def handleReport(video_id: str, reason: str) -> None;
     async def finishOnboarding(picked: list[str], goal: int, every: int) -> None;
     async def followTopic(slug: str, on: bool) -> None;
+    async def setVoicePref(pref: str) -> None;
     async def openSaved -> None;
     def unlock(e: MouseEvent);
 
@@ -96,7 +97,7 @@ def:pub AppShell -> JsxElement {
 
     def watch_topic(slug: str) {
         tab = "feed";
-        switchMode("topic", slug);
+        switchMode("generated" if slug == "generated" else "topic", slug);
     }
 
     def go_home(e: MouseEvent) {
@@ -118,6 +119,7 @@ def:pub AppShell -> JsxElement {
             current_topic = t.emoji + " " + t.name;
         }
     }
+    onboarding_topics = [t for t in topics if not t.is_virtual];
     empty_text = "Save videos with ☆ to rewatch them here." if mode == "saved" else "Nothing here yet. Follow a topic or check back soon.";
 
     return <div className="app">
@@ -125,7 +127,7 @@ def:pub AppShell -> JsxElement {
             {tab == "feed" and <header className="top-tabs">
                 <button className={"tab on" if mode == "foryou" else "tab"} onClick={lambda e: MouseEvent { switchMode("foryou", ""); }}>For You</button>
                 <button className={"tab on" if mode == "following" else "tab"} onClick={lambda e: MouseEvent { switchMode("following", ""); }}>Following</button>
-                {mode == "topic" and <span className="tab on">{current_topic}</span>}
+                {(mode == "topic" or mode == "generated") and <span className="tab on">{current_topic}</span>}
                 {mode == "saved" and <span className="tab on">★ Saved</span>}
             </header>}
 
@@ -135,6 +137,7 @@ def:pub AppShell -> JsxElement {
                 paused={overlay_open}
                 loading={loading}
                 emptyText={empty_text}
+                voicePref={profile.tts_pref if profile is not None else "elevenlabs"}
                 onActive={handle_active}
                 onNearEnd={handle_near_end}
                 onReact={handleReact}
@@ -142,7 +145,7 @@ def:pub AppShell -> JsxElement {
                 onWatched={handleWatched}
             />}
             {tab == "topics" and <TopicsPage topics={topics} onWatch={watch_topic} onFollow={followTopic}/>}
-            {tab == "me" and <ProfilePage profile={profile} topics={topics}/>}
+            {tab == "me" and <ProfilePage profile={profile} topics={topics} onSetVoice={setVoicePref}/>}
 
             <nav className="bottom-nav">
                 <button className={"nav on" if tab == "feed" and mode != "saved" else "nav"} onClick={go_home}>⌂<span>Home</span></button>
@@ -157,7 +160,7 @@ def:pub AppShell -> JsxElement {
                 goalReached={goalReached} onContinue={keep_learning} onBreak={take_break}
             />}
             {onBreak and <BreakScreen onResume={resume}/>}
-            {showOnboarding and unlocked and <Onboarding topics={topics} onDone={finishOnboarding}/>}
+            {showOnboarding and unlocked and <Onboarding topics={onboarding_topics} onDone={finishOnboarding}/>}
             {not unlocked and <div className="overlay splash" onClick={unlock}>
                 <div className="splash-inner">
                     <div className="logo">🧠</div>

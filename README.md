@@ -18,7 +18,8 @@ the web UI).
   - **Generated**: SmartTok's own ~60 s explainers. A research agent reads Wikipedia, writes a
     script, fact-checks each claim against what it read and revises before publishing. Videos are
     scene manifests rendered in the browser (templated SVG/HTML scenes + freely licensed Wikimedia
-    images) with ElevenLabs narration or the browser's built-in voice.
+    images) with ElevenLabs narration or the browser's built-in voice. Each viewer can pick their
+    narration voice (ElevenLabs / Google browser voice / plain browser voice) from the You tab.
 - **Anti-brainrot by design**: ranking favours quality, interest and topic variety over watch time;
   daily goals, session check-ins, recall quizzes and a "take a break" screen.
 - **Personalised without sign-up**: each browser gets a guest account automatically.
@@ -26,6 +27,8 @@ the web UI).
   all driven by a CLI suitable for cron.
 
 ## How it works
+
+![SmartTok architecture: client, server agents, graph store and external services](assets/jac_learning_platform.png)
 
 ```mermaid
 flowchart LR
@@ -72,7 +75,8 @@ jac run tools/admin.jac bootstrap        # topics, channels, 3 editorial seed vi
 jac run tools/admin.jac curate 6         # pull up to 6 new Shorts per channel
 ```
 
-Open the App URL, tap **Tap to start**, pick some topics and scroll.
+Open the App URL + `/app`, tap **Tap to start**, pick some topics and scroll. (The App URL's root path
+now shows the landing page.)
 
 ## Configuration
 

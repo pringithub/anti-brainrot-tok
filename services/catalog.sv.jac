@@ -182,7 +182,9 @@ node Profile {
         today_seconds: float = 0.0,
         today_videos: int = 0,
         streak_days: int = 0,
-        topics_seen: dict[str, int] = {};
+        topics_seen: dict[str, int] = {},
+        requested_jobs: list[str] = [],
+        tts_pref: str = "elevenlabs";
 }
 
 # User -> catalog video. Owned by the user, so other users can't read its fields.
@@ -271,7 +273,14 @@ obj TopicView {
         emoji: str,
         description: str,
         count: int = 0,
-        followed: bool = False;
+        followed: bool = False,
+        is_current_events: bool = False,
+        is_virtual: bool = False;
+}
+
+obj RequestResult {
+    has ok: bool,
+        message: str = "";
 }
 
 obj ProfileView {
@@ -286,7 +295,8 @@ obj ProfileView {
         streak_days: int,
         quiz_correct: int,
         quiz_total: int,
-        top_topics: list[str] = [];
+        top_topics: list[str] = [],
+        tts_pref: str = "elevenlabs";
 }
 
 obj ReviewItem {
@@ -409,9 +419,12 @@ def ensure_catalog() -> dict[str, int] {
         grant(log, level=ConnectPerm);
         created["signal_log"] = 1;
     }
-    if job_queue() is None {
-        root.shared ++> JobQueue();
+    q = job_queue();
+    if q is None {
+        q = (root.shared ++> JobQueue())[0];
     }
+    # ConnectPerm lets authenticated users enqueue their own generation requests.
+    grant(q, level=ConnectPerm);
     for v in all_videos() {
         grant(v, level=ConnectPerm);
         if v.provider == "abt" and v.creator_name != STUDIO_NAME {
