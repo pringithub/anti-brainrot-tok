@@ -129,8 +129,12 @@ jac script test    # offline tests (agents, planner, helpers)
 ## Deployment notes
 
 SmartTok needs a running Jac server (graph database, auth, background jobs), so static hosts like
-GitHub Pages won't work. Any host that can run `jac start main.jac` with persistent storage,
-outbound internet access and environment variables will.
+GitHub Pages won't work for the app itself. Any host that can run `jac start main.jac` with
+persistent storage, outbound internet access and environment variables will.
+
+The marketing landing page (what you see at `/`) has no server dependency, so a static copy of it
+lives in [`docs/`](docs/index.html) for GitHub Pages: enable **Settings → Pages → Source: Deploy
+from a branch → `main` / `/docs`**. It links out to this repo's Quick start instead of a live app.
 
 ## Status
 
