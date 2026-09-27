@@ -1,6 +1,6 @@
 # SmartTok
 
-![SmartTok: brainrot vs learning](assets/brand/smarttok-new-thumbnail.png)
+<img src="assets/brand/smarttok-new-thumbnail.png" alt="SmartTok: brainrot vs learning" width="100%"/>
 
 **Scroll smarter.** SmartTok is a TikTok-style vertical video feed where every video is worth your
 time: science, engineering, history, languages, math, DIY and news from multiple outlets. It is a
